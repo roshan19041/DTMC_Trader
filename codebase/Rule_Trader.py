@@ -5,7 +5,7 @@ Created on Sat Apr  6 10:02:22 2019
 
 @author: roshanprakash
 """
-
+import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,6 +29,7 @@ class Trader:
         """
         self.train_data = {}
         self.test_data = {}
+        self.validation_data = {}
         self.trigger_states = {}
         self.state_ranges = {}
         self.transition_matrix = {}
@@ -36,10 +37,7 @@ class Trader:
         self.transaction_volume=1000
         self.commission = 0.015
         for key, path in kwargs.items():
-            try:
-                df = pd.read_csv(path, usecols=['Date', 'Close', 'Open']).sort_values('Date')
-            except:
-                df = pd.read_csv(path, usecols=['date', 'close', 'open']).sort_values('date')
+            df = pd.read_csv(path, usecols=['Date', 'Close', 'Open']).sort_values('Date')
             df['delta'] = df.Close.pct_change()
             df['EMA'] = self.compute_EMA(df.Close)
             df['LT_MA'] = self.compute_MA(df.Close,long_term=True)
@@ -49,12 +47,25 @@ class Trader:
             df['LT_tau'] = (df.Close - df.LT_MA)#/df.LT_MA
             df['state'], self.state_ranges[key], trigger_state = self.get_state_representations(df.ST_tau)
             temp = df.dropna().reset_index(drop=True)
-            self.train_data[key] = temp.loc[:int(0.75*len(temp))]
-            self.test_data[key] = temp.loc[int(0.75*len(temp)):].reset_index(drop=True)
+            self.train_data[key] = temp.loc[:int(0.7*len(temp))]
+            self.test_data[key] = temp.loc[int(0.7*len(temp)):int(0.85*len(temp))].reset_index(drop=True)
+            self.validation_data[key] = temp.loc[int(0.85*len(temp)):].reset_index(drop=True)
             self.trigger_states[key] = trigger_state
-            self.transition_matrix[key] = self.compute_transition_matrix(key, lookahead=40)
+            ## param 'lookahead' should be tuned ; previously done for all stocks being considered
+            if key=='TSLA':
+                lookahead = 40
+            elif key=='GOOGL':
+                lookahead = 2
+            elif key=='PFE':
+                lookahead = 1
+            self.transition_matrix[key] = self.compute_transition_matrix(key, lookahead=lookahead)
             # setup a starting portfolio for the trader
             self.portfolio[key] = {'holdings': 0}
+            
+    def reset(self):
+        for key in self.portfolio.keys():
+            self.portfolio[key] = {'holdings': 0}
+        self.portfolio['balance'] = 2500000.0
             
     def compute_EMA(self, series, num_days=50):
         """
@@ -239,7 +250,6 @@ class Trader:
         confidence = False
         buy_rules = [0,0,0,0]
         next_vec = self.transition_matrix[name][int(current_state)]
-        print(next_vec)
         num_undesirable_states = (self.trigger_states[name]+1)
         num_desirable_states = (next_vec.size-num_undesirable_states)
         if num_undesirable_states<5:
@@ -297,7 +307,7 @@ class Trader:
         else:
             return 'hold'
     
-    def simulate_trader(self, override=False):
+    def simulate_trader(self, override=False, validate=False):
         """
         Simulates the trader's actions on the test data.
         
@@ -311,14 +321,19 @@ class Trader:
         - The results of the simulation run containing the history of profits made 
           during the simulation. (dict)
         """
+        if validate:
+            data = self.validation_data
+        else:
+            data = self.test_data
         results = {}
-        for name in self.test_data.keys():
+        for name in data.keys():
+            self.portfolio['balance'] = 2500000.0
             profits = []
             prev_action = None
             buy_record = []
-            for idx in range(len(self.test_data[name])-1):
-                observation = self.test_data[name].iloc[idx]
-                next_price = self.test_data[name].iloc[idx+1].Open
+            for idx in range(len(data[name])-1):
+                observation = data[name].iloc[idx]
+                next_price = data[name].iloc[idx+1].Open
                 action = self.choose_action(observation, name)
                 if action=='buy' and self.portfolio['balance']>=(1+self.commission)*\
                     (self.transaction_volume*next_price):
@@ -343,26 +358,33 @@ class Trader:
                             # sell all holdings at next day's opening price
                             for b in buy_record:
                                 profits.append(self.transaction_volume*(next_price-b)-\
-                                               (self.commission*self.transaction_volume))
+                                                   (self.commission*self.transaction_volume))
                                 self.portfolio[name]['holdings']-=self.transaction_volume
                                 self.portfolio['balance']+=self.transaction_volume*(next_price)-\
-                                               (self.commission*self.transaction_volume)
+                                                   (self.commission*self.transaction_volume)
                             assert self.portfolio[name]['holdings']==0, 'Implementation error in "sell"!'
                             buy_record = []  
                             prev_action = 'sell'
                 else:# hold
-                    pass
+                    prev_action = 'hold'
+                    #pass
             results[name] = profits
-            print(sum(profits))
+            print(sum(profits), name)
         return results
                 
 if __name__=='__main__':        
-    trader = Trader(TSLA='/Users/roshanprakash/Desktop/DeepRL_Trader/TSLA.csv')
-    #print(trader.train_data['TSLA'].head())
-    #print(trader.train_data['TSLA'].columns)
-    print(trader.simulate_trader())
+    trader = Trader(GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', PFE='../data/PFE.csv')
+    #trader = Trader(PFE='../data/PFE.csv')
+    print('=================================== Test-time Profits ===================================')
+    print()
+    test_results = trader.simulate_trader()
+    trader.reset()
+    print()
+    print('=================================== Validation-time Profits ===================================')
+    print()
+    validation_results = trader.simulate_trader(validate=True)
     #print(trader.transition_matrix['TSLA'])
     #print(trader.choose_action(t.train_data['TSLA'].iloc[100], 'TSLA'))
-    plt.figure(figsize=(12,7))
-    plt.hist(trader.train_data['TSLA'].ST_tau, bins=30, edgecolor='black', alpha=0.75)
-    plt.show()
+    #plt.figure(figsize=(12,7))
+    #plt.hist(trader.train_data['TSLA'].ST_tau, bins=30, edgecolor='black', alpha=0.75)
+    #plt.show()
