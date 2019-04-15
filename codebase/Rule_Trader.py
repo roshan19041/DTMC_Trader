@@ -5,7 +5,6 @@ Created on Sat Apr  6 10:02:22 2019
 
 @author: roshanprakash
 """
-import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -35,16 +34,18 @@ class Trader:
         self.transition_matrix = {}
         self.portfolio = {'balance':2500000.0}
         self.transaction_volume=1000
-        self.commission = 0.015
+        self.commission = 0.0012
+        self.max_buys = {} 
+        self.buys = {}
         for key, path in kwargs.items():
             df = pd.read_csv(path, usecols=['Date', 'Close', 'Open']).sort_values('Date')
             df['delta'] = df.Close.pct_change()
             df['EMA'] = self.compute_EMA(df.Close)
-            df['LT_MA'] = self.compute_MA(df.Close,long_term=True)
-            df['ST_MA'] = self.compute_MA(df.Close,long_term=False)
+            df['LT_MA'] = self.compute_MA(df.Close, long_term=True)
+            df['ST_MA'] = self.compute_MA(df.Close, long_term=False)
             df['MACD'], df['signal_line'] = self.compute_momentum_signals(df.Close)
-            df['ST_tau'] = (df.Close - df.ST_MA)#/df.ST_MA
-            df['LT_tau'] = (df.Close - df.LT_MA)#/df.LT_MA
+            df['ST_tau'] = (df.Close - df.ST_MA)
+            df['LT_tau'] = (df.Close - df.LT_MA)
             df['state'], self.state_ranges[key], trigger_state = self.get_state_representations(df.ST_tau)
             temp = df.dropna().reset_index(drop=True)
             self.train_data[key] = temp.loc[:int(0.7*len(temp))]
@@ -58,13 +59,33 @@ class Trader:
                 lookahead = 2
             elif key=='PFE':
                 lookahead = 1
+            elif key=='FCSC':
+                lookahead = 70
+            elif key=='FLKS':
+                lookahead = 120
+            elif key=='EFII':
+                lookahead = 45
             self.transition_matrix[key] = self.compute_transition_matrix(key, lookahead=lookahead)
             # setup a starting portfolio for the trader
             self.portfolio[key] = {'holdings': 0}
+            if not key=='PFE':
+                self.max_buys[key] = 10
+            elif key=='FCSC':
+                self.max_buys = 30
+            elif key=='FLKS':
+                self.max_buys = 10
+            elif key=='EFII':
+                self.max_buys = 10
+            else:
+                self.max_buys[key] = 2
+            #self.max_buys[key] = lookahead
+            self.buys[key] = 0.0
             
     def reset(self):
+        """ Resets trader's portfolio for another run of the simulation """
         for key in self.portfolio.keys():
             self.portfolio[key] = {'holdings': 0}
+            self.buys[key] = 0
         self.portfolio['balance'] = 2500000.0
             
     def compute_EMA(self, series, num_days=50):
@@ -84,14 +105,12 @@ class Trader:
         temp = series.copy().reset_index(drop=True) # DO NOT MODIFY THE ORIGINAL DATAFRAME!
         smoothing_factor = 2 / (num_days + 1)
         EMA_prev = 0.0
-        
         for idx in range(len(temp)):
             EMA_current = (temp[idx] * smoothing_factor) + EMA_prev \
                 * (1 - smoothing_factor)
             # update values for next iteration
             temp[idx] = EMA_current
             EMA_prev = EMA_current 
-        
         return temp
     
     def compute_momentum_signals(self, series):
@@ -197,7 +216,7 @@ class Trader:
         # compute the ranges for each state using the percentiles
         percentiles = pd.Series(list(zip(percentiles.shift().fillna \
                                     (series.min()), percentiles)))
-        # bin values into states
+        # map values into states
         states = self.map_to_states(series, percentiles)
         return states, percentiles, trigger_state
     
@@ -217,7 +236,7 @@ class Trader:
           where 'k' is the number of states.
         """
         assert key in self.train_data.keys(), \
-             'Company data not found in records! Try again after storing records.'
+         'Company data not found in records! Try again after storing records.'
         num_states = int(self.train_data[key].state.max()+1)
         Q = np.zeros((num_states, num_states))
         temp = self.train_data[key][:-1]
@@ -228,7 +247,7 @@ class Trader:
             Q[int(current_), int(next_)]+=1.0
             freqs[int(current_)]+=1.0
         for idx in range(num_states):
-            Q[idx,:]/= freqs[idx]
+            Q[idx,:]/=freqs[idx]
         return Q
  
     def choose_action(self, d, name):
@@ -327,7 +346,8 @@ class Trader:
             data = self.test_data
         results = {}
         for name in data.keys():
-            self.portfolio['balance'] = 2500000.0
+            # reset
+            actions = []
             profits = []
             prev_action = None
             buy_record = []
@@ -337,12 +357,13 @@ class Trader:
                 action = self.choose_action(observation, name)
                 if action=='buy' and self.portfolio['balance']>=(1+self.commission)*\
                     (self.transaction_volume*next_price):
-                        if (prev_action=='buy' and override==True) or prev_action!='buy':
+                        if self.buys[name]<=self.max_buys[name]:
                             # buy at next day's opening price
                             self.portfolio['balance']-=(1+self.commission)*\
                                                 (self.transaction_volume*next_price)
                             self.portfolio[name]['holdings']+=self.transaction_volume
                             buy_record.append(next_price)
+                            self.buys[name]+=1
                             prev_action = 'buy'
                 elif action=='sell' and self.portfolio[name]['holdings']>=self.transaction_volume:
                         if override==True: 
@@ -357,34 +378,73 @@ class Trader:
                         elif prev_action!='sell' and override==False:
                             # sell all holdings at next day's opening price
                             for b in buy_record:
-                                profits.append(self.transaction_volume*(next_price-b)-\
-                                                   (self.commission*self.transaction_volume))
+                                profits.append((1-self.commission)*self.transaction_volume*(next_price-b))
                                 self.portfolio[name]['holdings']-=self.transaction_volume
-                                self.portfolio['balance']+=self.transaction_volume*(next_price)-\
-                                                   (self.commission*self.transaction_volume)
+                                self.portfolio['balance']+=(1-self.commission)*self.transaction_volume*next_price
+                                self.buys[name]-=1
+                            # sanity check
                             assert self.portfolio[name]['holdings']==0, 'Implementation error in "sell"!'
+                            assert self.buys[name]==0, 'Implementation error in "buy"!'
                             buy_record = []  
                             prev_action = 'sell'
-                else:# hold
+                else: # hold
                     prev_action = 'hold'
-                    #pass
+                actions.append(prev_action)
+            #================= PRINT SIMULATION STATS ================#
+            print()
+            print('---- Post-simulation portfolio characteristics ----')
+            print('Company : {}'.format(name))
+            print('Account Balance : {} USD'.format(self.portfolio['balance']))
+            print('Holdings : {}'.format(self.portfolio[name]['holdings']))
+            print('Next Price : {}'.format(next_price))
+            print('Net Present Value : {}'.format(\
+                  self.portfolio['balance']+self.portfolio[name]['holdings']*next_price))
+            print('Net Profits : {}'.format(sum(profits)))
+            #=========================================================#
             results[name] = profits
-            print(sum(profits), name)
+            #===================== OPTIONAL PLOT =====================#
+            once_buy = False
+            once_sell = False
+            temp = data[name].iloc[:-1].copy()
+            temp['action'] = actions
+            plt.figure(figsize=(13, 7))
+            ax = temp.Open.plot(color='green', label='Price(USD)')
+            ax.grid(color='orange', alpha=0.35)
+            ax.set_facecolor('xkcd:black')
+            ymin, ymax = ax.get_ylim()
+            for idx in range(len(temp)):
+                if temp.iloc[idx].action=='buy':
+                    if once_buy:
+                        ax.vlines(x=idx, ymin=ymin, ymax=ymax, linestyles='dotted', color='blue', alpha=0.88)
+                    else:
+                        ax.vlines(x=idx, ymin=ymin, ymax=ymax, linestyles='dotted', color='blue', alpha=0.88, label='buy')
+                        once_buy = True
+                elif temp.iloc[idx].action=='sell':
+                    if once_sell:
+                        ax.vlines(x=idx, ymin=ymin, ymax=ymax, color='red', alpha=0.75)
+                    else:
+                        ax.vlines(x=idx, ymin=ymin, ymax=ymax, color='red', alpha=0.75, label='sell')
+                        once_sell = True            
+            plt.xlabel('Simulated Day (#)')
+            plt.ylabel('Price in USD')
+            plt.title('Trade Simulation Plot : {}'.format(name))
+            plt.legend()
+            plt.show()
+            #=========================================================#
+            self.reset() # reset for next stock
         return results
                 
 if __name__=='__main__':        
-    trader = Trader(GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', PFE='../data/PFE.csv')
-    #trader = Trader(PFE='../data/PFE.csv')
-    print('=================================== Test-time Profits ===================================')
+    trader = Trader(FCSC='../data/FCSC.csv', GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', PFE='../data/PFE.csv', EFII='../data/EFII.csv')
+    #trader = Trader(EFII='../data/EFII.csv')
+    print()
+    print('====================================== Test-time Stats ======================================')
     print()
     test_results = trader.simulate_trader()
     trader.reset()
     print()
-    print('=================================== Validation-time Profits ===================================')
+    print('=================================== Validation-time Stats ===================================')
     print()
     validation_results = trader.simulate_trader(validate=True)
-    #print(trader.transition_matrix['TSLA'])
-    #print(trader.choose_action(t.train_data['TSLA'].iloc[100], 'TSLA'))
-    #plt.figure(figsize=(12,7))
-    #plt.hist(trader.train_data['TSLA'].ST_tau, bins=30, edgecolor='black', alpha=0.75)
-    #plt.show()
+    print()
+    print('============================================= END ===========================================')
