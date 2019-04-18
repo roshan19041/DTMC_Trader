@@ -388,18 +388,19 @@ class Trader:
                             prev_action = 'sell'   
                         else:
                             # sell only profitable holdings at next day's opening price
-                            pops = []
+                            sells = 0
+                            temp = buy_record.copy()
                             for bought_price in buy_record:
                                 if next_price>=bought_price:
                                     profits.append((1-self.commission)*self.transaction_volume*(next_price-bought_price))
                                     self.portfolio[name]['holdings']-=self.transaction_volume
                                     self.portfolio['balance']+=(1-self.commission)*self.transaction_volume*next_price
                                     self.buys[name]-=1
-                                    pops.append(bought_price)
-                            # remove the 'bought prices' of disposed stocks from buy record
-                            for price in pops:
-                                buy_record.remove(price)
-                            if len(pops)>0:
+                                    # remove the 'bought prices' of disposed stocks from buy record
+                                    temp.remove(bought_price)
+                                    sells+=1
+                            buy_record = temp
+                            if sells>0:
                                 actions.append('sell')
                                 prev_action = 'sell'
                             else:
