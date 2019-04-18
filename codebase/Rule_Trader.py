@@ -58,27 +58,29 @@ class Trader:
             elif key=='GOOGL':
                 lookahead = 2
             elif key=='PFE':
-                lookahead = 1
+                #lookahead = 1
+                lookahead = 95
             elif key=='FCSC':
-                lookahead = 70
+                lookahead = 9
             elif key=='FLKS':
-                lookahead = 120
+                lookahead = 155
             elif key=='EFII':
                 lookahead = 45
             self.transition_matrix[key] = self.compute_transition_matrix(key, lookahead=lookahead)
             # setup a starting portfolio for the trader
             self.portfolio[key] = {'holdings': 0}
-            if not key=='PFE':
-                self.max_buys[key] = 10
+            if key=='PFE':
+                self.max_buys[key] = 35
             elif key=='FCSC':
-                self.max_buys = 30
+                self.max_buys[key] = 15
             elif key=='FLKS':
-                self.max_buys = 10
+                self.max_buys[key] = 30
             elif key=='EFII':
-                self.max_buys = 10
+                self.max_buys[key] = 25
+            elif key=='GOOGL':
+                self.max_buys[key] = 10
             else:
-                self.max_buys[key] = 2
-            #self.max_buys[key] = lookahead
+                self.max_buys[key] = 10
             self.buys[key] = 0.0
             
     def reset(self):
@@ -326,7 +328,7 @@ class Trader:
         else:
             return 'hold'
     
-    def simulate_trader(self, override=False, validate=False):
+    def simulate_trader(self, validate=False, sell_all=False):
         """
         Simulates the trader's actions on the test data.
         
@@ -357,28 +359,24 @@ class Trader:
                 action = self.choose_action(observation, name)
                 if action=='buy' and self.portfolio['balance']>=(1+self.commission)*\
                     (self.transaction_volume*next_price):
-                        if self.buys[name]<=self.max_buys[name]:
+                        if self.buys[name]<self.max_buys[name]:
                             # buy at next day's opening price
                             self.portfolio['balance']-=(1+self.commission)*\
                                                 (self.transaction_volume*next_price)
                             self.portfolio[name]['holdings']+=self.transaction_volume
+                            # update system characteristics
                             buy_record.append(next_price)
                             self.buys[name]+=1
+                            actions.append('buy')
                             prev_action = 'buy'
-                elif action=='sell' and self.portfolio[name]['holdings']>=self.transaction_volume:
-                        if override==True: 
-                            # sell the earliest buy at next day's opening price
-                            self.portfolio[name]['holdings']-=self.transaction_volume
-                            profits.append(self.transaction_volume*(next_price-buy_record[0])-\
-                                               (self.commission*self.transaction_volume))
-                            self.portfolio['balance']+=self.transaction_volume*(next_price)-\
-                                               (self.commission*self.transaction_volume)
-                            buy_record.pop(0)  
-                            prev_action = 'sell'
-                        elif prev_action!='sell' and override==False:
+                        else:
+                            prev_action = 'hold'
+                            actions.append('hold')
+                elif action=='sell' and prev_action!='sell' and self.portfolio[name]['holdings']>=self.transaction_volume:
+                        if sell_all:
                             # sell all holdings at next day's opening price
-                            for b in buy_record:
-                                profits.append((1-self.commission)*self.transaction_volume*(next_price-b))
+                            for bought_price in buy_record:
+                                profits.append((1-self.commission)*self.transaction_volume*(next_price-bought_price))
                                 self.portfolio[name]['holdings']-=self.transaction_volume
                                 self.portfolio['balance']+=(1-self.commission)*self.transaction_volume*next_price
                                 self.buys[name]-=1
@@ -386,10 +384,31 @@ class Trader:
                             assert self.portfolio[name]['holdings']==0, 'Implementation error in "sell"!'
                             assert self.buys[name]==0, 'Implementation error in "buy"!'
                             buy_record = []  
-                            prev_action = 'sell'
+                            actions.append('sell')
+                            prev_action = 'sell'   
+                        else:
+                            # sell only profitable holdings at next day's opening price
+                            pops = []
+                            for bought_price in buy_record:
+                                if next_price>=bought_price:
+                                    profits.append((1-self.commission)*self.transaction_volume*(next_price-bought_price))
+                                    self.portfolio[name]['holdings']-=self.transaction_volume
+                                    self.portfolio['balance']+=(1-self.commission)*self.transaction_volume*next_price
+                                    self.buys[name]-=1
+                                    pops.append(bought_price)
+                            # remove the 'bought prices' of disposed stocks from buy record
+                            for price in pops:
+                                buy_record.remove(price)
+                            if len(pops)>0:
+                                actions.append('sell')
+                                prev_action = 'sell'
+                            else:
+                                actions.append('hold')
+                                prev_action = 'hold'
+                        
                 else: # hold
-                    prev_action = 'hold'
-                actions.append(prev_action)
+                    actions.append('hold')
+                    prev_action = 'hold' 
             #================= PRINT SIMULATION STATS ================#
             print()
             print('---- Post-simulation portfolio characteristics ----')
@@ -435,8 +454,8 @@ class Trader:
         return results
                 
 if __name__=='__main__':        
-    trader = Trader(FCSC='../data/FCSC.csv', GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', PFE='../data/PFE.csv', EFII='../data/EFII.csv')
-    #trader = Trader(EFII='../data/EFII.csv')
+    trader = Trader(FLKS='../data/FLKS.csv', FCSC='../data/FCSC.csv', GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', PFE='../data/PFE.csv', EFII='../data/EFII.csv')
+    #trader = Trader(GOOGL='../data/GOOGL.csv')
     print()
     print('====================================== Test-time Stats ======================================')
     print()
