@@ -54,30 +54,31 @@ class Trader:
             self.trigger_states[key] = trigger_state
             ## param 'lookahead' should be tuned ; previously done for all stocks being considered
             if key=='TSLA':
-                lookahead = 40
+                lookahead = 18
             elif key=='GOOGL':
                 lookahead = 2
             elif key=='PFE':
-                #lookahead = 1
-                lookahead = 95
+                lookahead = 15
             elif key=='FCSC':
-                lookahead = 9
+                lookahead = 55
             elif key=='FLKS':
-                lookahead = 155
+                lookahead = 180
             elif key=='EFII':
-                lookahead = 45
+                lookahead = 40
             self.transition_matrix[key] = self.compute_transition_matrix(key, lookahead=lookahead)
             # setup a starting portfolio for the trader
             self.portfolio[key] = {'holdings': 0}
             if key=='PFE':
                 self.max_buys[key] = 35
             elif key=='FCSC':
-                self.max_buys[key] = 15
+                self.max_buys[key] = 30
             elif key=='FLKS':
                 self.max_buys[key] = 30
             elif key=='EFII':
                 self.max_buys[key] = 25
             elif key=='GOOGL':
+                self.max_buys[key] = 10
+            elif key=='TSLA':
                 self.max_buys[key] = 10
             else:
                 self.max_buys[key] = 10
@@ -388,7 +389,7 @@ class Trader:
                             prev_action = 'sell'   
                         else:
                             # sell only profitable holdings at next day's opening price
-                            sells = 0
+                            sells = 0 
                             temp = buy_record.copy()
                             for bought_price in buy_record:
                                 if next_price>=bought_price:
@@ -405,11 +406,19 @@ class Trader:
                                 prev_action = 'sell'
                             else:
                                 actions.append('hold')
-                                prev_action = 'hold'
-                        
+                                prev_action = 'hold'        
                 else: # hold
                     actions.append('hold')
-                    prev_action = 'hold' 
+                    prev_action = 'hold'  
+            # sell remaining holdings
+            temp = buy_record.copy()
+            for bought_price in buy_record:
+                profits.append((1-self.commission)*self.transaction_volume*(next_price-bought_price))
+                self.portfolio[name]['holdings']-=self.transaction_volume
+                self.portfolio['balance']+=(1-self.commission)*self.transaction_volume*next_price
+                self.buys[name]-=1
+                # remove the 'bought prices' of disposed stocks from buy record
+                temp.remove(bought_price)
             #================= PRINT SIMULATION STATS ================#
             print()
             print('---- Post-simulation portfolio characteristics ----')
@@ -455,8 +464,8 @@ class Trader:
         return results
                 
 if __name__=='__main__':        
-    trader = Trader(FLKS='../data/FLKS.csv', FCSC='../data/FCSC.csv', GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', PFE='../data/PFE.csv', EFII='../data/EFII.csv')
-    #trader = Trader(GOOGL='../data/GOOGL.csv')
+    trader = Trader(PFE='../data/PFE.csv', FLKS='../data/FLKS.csv', FCSC='../data/FCSC.csv', GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', EFII='../data/EFII.csv')
+    #trader = Trader(FCSC='../data/FCSC.csv')
     print()
     print('====================================== Test-time Stats ======================================')
     print()
