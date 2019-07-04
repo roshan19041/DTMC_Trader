@@ -26,8 +26,8 @@ class Trader:
         -------
         None
         """
+        self.source_data = {}
         self.train_data = {}
-        self.test_data = {}
         self.validation_data = {}
         self.trigger_states = {}
         self.state_ranges = {}
@@ -48,23 +48,23 @@ class Trader:
             df['LT_tau'] = (df.Close - df.LT_MA)
             df['state'], self.state_ranges[key], trigger_state = self.get_state_representations(df.ST_tau)
             temp = df.dropna().reset_index(drop=True)
-            self.train_data[key] = temp.loc[:int(0.7*len(temp))]
-            self.test_data[key] = temp.loc[int(0.7*len(temp)):int(0.85*len(temp))].reset_index(drop=True)
+            self.source_data[key] = temp.loc[:int(0.7*len(temp))]
+            self.train_data[key] = temp.loc[int(0.7*len(temp)):int(0.85*len(temp))].reset_index(drop=True)
             self.validation_data[key] = temp.loc[int(0.85*len(temp)):].reset_index(drop=True)
             self.trigger_states[key] = trigger_state
             ## param 'lookahead' should be tuned ; previously done for all stocks being considered
             if key=='TSLA':
-                lookahead = 18
+                lookahead = 30
             elif key=='GOOGL':
-                lookahead = 2
+                lookahead = 3
             elif key=='PFE':
-                lookahead = 15
+                lookahead = 50
             elif key=='FCSC':
-                lookahead = 55
+                lookahead = 75
             elif key=='FLKS':
                 lookahead = 180
             elif key=='EFII':
-                lookahead = 40
+                lookahead = 50
             self.transition_matrix[key] = self.compute_transition_matrix(key, lookahead=lookahead)
             # setup a starting portfolio for the trader
             self.portfolio[key] = {'holdings': 0}
@@ -73,7 +73,7 @@ class Trader:
             elif key=='FCSC':
                 self.max_buys[key] = 30
             elif key=='FLKS':
-                self.max_buys[key] = 30
+                self.max_buys[key] = 5
             elif key=='EFII':
                 self.max_buys[key] = 25
             elif key=='GOOGL':
@@ -106,11 +106,10 @@ class Trader:
         - A pandas series containing EMA's for every timestamp (row index).
         """
         temp = series.copy().reset_index(drop=True) # DO NOT MODIFY THE ORIGINAL DATAFRAME!
-        smoothing_factor = 2 / (num_days + 1)
+        smoothing_factor = 2/(num_days+1)
         EMA_prev = 0.0
         for idx in range(len(temp)):
-            EMA_current = (temp[idx] * smoothing_factor) + EMA_prev \
-                * (1 - smoothing_factor)
+            EMA_current = (temp[idx]*smoothing_factor)+EMA_prev*(1-smoothing_factor)
             # update values for next iteration
             temp[idx] = EMA_current
             EMA_prev = EMA_current 
@@ -213,7 +212,8 @@ class Trader:
         assert 100%k==0, 'Invalid value for the number of states. Try again with another value!'
         delta = (100/k)/100
         idxs = [delta*idx for idx in range(1,k+1)]
-        percentiles = pd.Series({key+1:series.quantile(val) for \
+        temp = series.loc[:int(0.7*len(series))] # use only the source data to generate transition matrix
+        percentiles = pd.Series({key+1:temp.quantile(val) for \
                                  key,val in enumerate(idxs)})
         trigger_state = np.max(np.argwhere(percentiles<0))+1
         # compute the ranges for each state using the percentiles
@@ -238,19 +238,23 @@ class Trader:
         - A numpy array of transition probabilities between states ; shape-->(k*k)
           where 'k' is the number of states.
         """
-        assert key in self.train_data.keys(), \
+        assert key in self.source_data.keys(), \
          'Company data not found in records! Try again after storing records.'
-        num_states = int(self.train_data[key].state.max()+1)
+        num_states = int(self.source_data[key].state.max()+1)
         Q = np.zeros((num_states, num_states))
-        temp = self.train_data[key][:-1]
+        temp = self.source_data[key]
         freqs = [0.0]*num_states
-        for idx in range(len(temp.index)-lookahead+1):
-            current_ = self.train_data[key].iloc[idx]['state']
-            next_ = self.train_data[key].iloc[idx+lookahead]['state']
+        for idx in range(len(temp.loc[:int(0.7*len(temp))].index)-lookahead+1): # use only the source data to generate transition matrix
+            current_ = self.source_data[key].iloc[idx]['state']
+            next_ = self.source_data[key].iloc[idx+lookahead]['state']
             Q[int(current_), int(next_)]+=1.0
             freqs[int(current_)]+=1.0
         for idx in range(num_states):
-            Q[idx,:]/=freqs[idx]
+            assert np.sum(Q[idx,:])==freqs[idx], 'Transition matrix computational error!'
+            if freqs[idx]!=0.0:
+                Q[idx,:]/=freqs[idx]
+            else:
+                Q[idx,:] = 0.0
         return Q
  
     def choose_action(self, d, name):
@@ -346,7 +350,7 @@ class Trader:
         if validate:
             data = self.validation_data
         else:
-            data = self.test_data
+            data = self.train_data
         results = {}
         for name in data.keys():
             # reset
@@ -465,11 +469,11 @@ class Trader:
                 
 if __name__=='__main__':        
     trader = Trader(PFE='../data/PFE.csv', FLKS='../data/FLKS.csv', FCSC='../data/FCSC.csv', GOOGL='../data/GOOGL.csv', TSLA='../data/TSLA.csv', EFII='../data/EFII.csv')
-    #trader = Trader(FCSC='../data/FCSC.csv')
+    #trader = Trader(FLKS='../data/FLKS.csv')
     print()
-    print('====================================== Test-time Stats ======================================')
+    print('====================================== Training-time Stats ======================================')
     print()
-    test_results = trader.simulate_trader()
+    training_results = trader.simulate_trader()
     trader.reset()
     print()
     print('=================================== Validation-time Stats ===================================')
